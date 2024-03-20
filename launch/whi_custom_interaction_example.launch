@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+
+  <node name="whi_custom_interaction_example" pkg="whi_custom_interaction_example" type="whi_custom_interaction_example" output="screen">
+    <rosparam command="load" file="$(find whi_custom_interaction_example)/config/config.yaml"/>
+  </node>
+
+</launch>
