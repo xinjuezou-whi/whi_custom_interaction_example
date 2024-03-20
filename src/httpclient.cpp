@@ -235,7 +235,6 @@ int main(int argc, char **argv)
 
     const std::string nodeName("whi_custom_interaction_example");
     ros::init(argc, argv, nodeName);
-    const std::string nodeName(nodeName); 
     ros::NodeHandle nd(nodeName);
 
     bool gethost=nd.getParam("host", host);
