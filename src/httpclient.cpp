@@ -232,8 +232,10 @@ bool RequestReclaimed(std_srvs::SetBool::Request& Req,
 int main(int argc, char **argv)
 {
     setlocale(LC_ALL, ""); // for Chinese char: setlocale(LC_CTYPE, "zh_CN.utf8");
-    ros::init(argc, argv, "http_client");
-    const std::string nodeName("http_client"); 
+
+    const std::string nodeName("whi_custom_interaction_example");
+    ros::init(argc, argv, nodeName);
+    const std::string nodeName(nodeName); 
     ros::NodeHandle nd(nodeName);
 
     bool gethost=nd.getParam("host", host);
