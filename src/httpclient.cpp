@@ -3,7 +3,7 @@ node to handle httpclient get request
 
 Features:
 - http get request
--
+- post states to service 
 
 Written by Yue Zhou, sevendull@163.com
 
@@ -12,16 +12,24 @@ All text above must be included in any redistribution.
 
 Changelog:
 2024-03-19: Initial version
-2024-xx-xx: xxx
+2024-04-02: post state module
 ******************************************************************/
 #include "whi_custom_interaction_example/httplib.h"
 #include "ros/ros.h"
 #include "std_srvs/SetBool.h"
 #include <jsoncpp/json/json.h>
 #include <iostream>
+#include "whi_interfaces/WhiBattery.h"
+#include "whi_interfaces/WhiMotionState.h"
+#include "whi_interfaces/WhiBoundingBox.h"
+#include "whi_interfaces/WhiBoundingBoxes.h"
+#include <csignal>
 
 std::string host;
 int port;
+int timeout = 30;
+std::string posthost;
+int postport;
 
 static bool jsonRoot(const std::string& Src, Json::Value& Root)
 {
@@ -42,7 +50,10 @@ static bool jsonRoot(const std::string& Src, Json::Value& Root)
 // 开始动作的请求, "开始放片" 和 "开始抓片" 的请求
 bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
 {
-    ros::Rate rate(1);
+    int ratei = 1;
+    ros::Rate rate(ratei);
+    int mytimeout = timeout * ratei;
+    int gettime = 0;
     httplib::Params params;
     std::string getStr = Apistr;
     httplib::Headers headers = { { "Accept", "application/json" } };
@@ -66,6 +77,11 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             std::cout << getres->status << std::endl;
             std::cout << getres->get_header_value("Content-Type") << std::endl;
             std::cout << getres->body << std::endl;
+            if(gettime > mytimeout)
+            {
+                ROS_INFO("%s request timeout ! , %d " ,getStr.c_str() ,gettime );
+                return false;
+            }
 
             Json::Value root;
             if (!jsonRoot(getres->body, root))
@@ -97,7 +113,7 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             std::cout << "error code: " << getres.error() << std::endl;
             return false;
         }
-
+        gettime++;
         rate.sleep();
     }
 }
@@ -105,7 +121,10 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
 // 动作请求
 bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::SetBool::Response& Res)
 {
-    ros::Rate rate(1) ;
+    int ratei = 1;
+    ros::Rate rate(ratei) ;
+    int mytimeout = timeout * ratei;
+    int gettime = 0;
     httplib::Params params;
     std::string getStr = "/getRequest";
     httplib::Headers headers = { { "Accept", "application/json" } };
@@ -121,12 +140,18 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             std::cout << getres->status << std::endl;
             std::cout << getres->get_header_value("Content-Type") << std::endl;
             std::cout << getres->body << std::endl;
-
+            if(gettime > mytimeout)
+            {
+                ROS_INFO("%s request timeout ! , %d " ,getStr.c_str() ,gettime );
+                Res.success = false;
+                Res.message = "time out " ;
+                return true;
+            }
             Json::Value root;
             if (!jsonRoot(getres->body, root))
             {
                 ROS_INFO("json::parse error!");
-                return false;
+                return true;
             }
             int status = root["status"].asInt();
             std::string msgStr = root["msg"].asString();
@@ -173,6 +198,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             Res.success = false;
             return true;
         }
+        gettime++;
         rate.sleep();
     }
 }
@@ -229,6 +255,131 @@ bool RequestReclaimed(std_srvs::SetBool::Request& Req,
     return true;
 }
 
+
+//-----------------------POST STATES--------------------------------
+
+std::atomic<bool> Update = {false};
+std::atomic<bool> UpdateDet = {false};
+Json::Value stateJson;
+Json::Value taskJson;
+Json::Value detJson;
+std::string postAddr;
+std::atomic_bool exit_app(false);
+
+void signal_handler(int signum) 
+{
+    if (signum == SIGINT) 
+    {
+        std::cout << "Caught SIGINT, exiting gracefully..." << std::endl;
+        exit_app = true;
+        ros::shutdown();
+    }
+}
+
+void stateCallback(const whi_interfaces::WhiBattery::ConstPtr& MsgBat)
+{
+    int battery = MsgBat->state;
+    stateJson["power"] = battery ;
+
+
+}
+
+void taskCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgTask)
+{
+    //std::string order = MsgTask->order; 
+    //std::string suborder = MsgTask->suborder;
+    taskJson["order"] = "order";
+    taskJson["subOrder"] = "subOrder";
+
+}
+
+void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
+{
+    UpdateDet = true;
+    detJson.clear();
+    std::vector<whi_interfaces::WhiBoundingBox> detResults = MsgDet->bounding_boxes;
+    std::string clsname = detResults.front().cls;
+    std::string resultStr = "result"+clsname;
+    Json::Value detArray;
+    int i = 0;
+    for (auto& onedet : detResults)
+    {
+        i++;
+        Json::Value detvalue;
+        detvalue["name"] = onedet.cls + std::to_string(i);
+        detvalue["value"] = onedet.state;
+        detvalue["unitName"] = "Unit";
+        detArray.append(detvalue);
+    }
+    detJson[resultStr] = detArray;
+
+}
+
+
+bool GetAction(std_srvs::SetBool::Request& Req,
+    std_srvs::SetBool::Response& Res)
+{
+    if (Req.data)
+    {
+        Update = true;
+        Res.success = true;
+    }
+
+    return true;
+}
+
+void senddataFun()
+{
+    const char* hostaddr = posthost.c_str();
+    httplib::Client cli(hostaddr, postport);
+    Json::Value sendJson;
+    while (!exit_app.load())
+    {
+        ros::Rate loop_rate(1);
+        if (Update)
+        {
+            sendJson.clear();
+            sendJson = taskJson;
+            for (const auto& key : stateJson.getMemberNames()) 
+            {
+                sendJson[key] = stateJson[key];
+            }
+            if (UpdateDet)
+            {
+                for (const auto& key : detJson.getMemberNames()) 
+                {
+                    sendJson[key] = detJson[key];
+                }
+            }
+        }
+
+        if (sendJson.isNull() || sendJson.empty())
+        {
+            ROS_INFO("sendJson is empty " );
+        }
+        else
+        {
+            Json::FastWriter writer;
+	        std::string sendStr = writer.write(sendJson);
+            httplib::Params params;
+            params.emplace("state", sendStr);
+            std::string poststr = "/" + postAddr;
+            auto res = cli.Post(poststr, params);
+            if (res->status == httplib::StatusCode::OK_200)
+            {
+                ROS_INFO("POST success ,post data is: %s",sendStr.c_str());
+            }
+
+        }
+
+        Update = false;
+        UpdateDet = false;
+        loop_rate.sleep();
+    }
+
+
+}
+
 int main(int argc, char **argv)
 {
     setlocale(LC_ALL, ""); // for Chinese char: setlocale(LC_CTYPE, "zh_CN.utf8");
@@ -237,20 +388,42 @@ int main(int argc, char **argv)
     ros::init(argc, argv, nodeName);
     ros::NodeHandle nd(nodeName);
 
+//---------get request -----------------------
     bool gethost=nd.getParam("host", host);
 	bool getport=nd.getParam("port", port);
-    ROS_INFO("getparam host:%s , port:%d",host.c_str(),port);
+    nd.getParam("timeout",timeout);
+    ROS_INFO("getparam host:%s , port:%d ,timeout:%d",host.c_str(),port,timeout);
 
-    ros::ServiceServer service1 = nd.advertiseService("place", RequestPlace);
-
-    ros::ServiceServer service2 = nd.advertiseService("placed", RequestPlaced);
-
-    ros::ServiceServer service3 = nd.advertiseService("reclaim", RequestReclaim);
-
-    ros::ServiceServer service4 = nd.advertiseService("reclaimed", RequestReclaimed);
+    ros::ServiceServer servicePlace = nd.advertiseService("place", RequestPlace);
+    ros::ServiceServer servicePlaced = nd.advertiseService("placed", RequestPlaced);
+    ros::ServiceServer serviceReclaim = nd.advertiseService("reclaim", RequestReclaim);
+    ros::ServiceServer serviceReclaimed = nd.advertiseService("reclaimed", RequestReclaimed);
     
+//---------post states -----------------------
+
+    gethost=nd.getParam("posthost", posthost);
+	getport=nd.getParam("postport", postport);
+    ROS_INFO("post host:%s , post port:%d",posthost.c_str(),postport);   
+
+    std::string stateTopic,taskTopic,detTopic;
+    nd.getParam("state_topic", stateTopic);
+    nd.getParam("task_topic", taskTopic);
+    nd.getParam("det_topic", detTopic);
+    nd.getParam("post_addr",postAddr);
+    ROS_INFO("state_topic:%s , task_topic:%s , det_topic:%s",stateTopic.c_str(),taskTopic.c_str(),detTopic.c_str());   
+
+    signal(SIGINT, signal_handler);
+
+    ros::Subscriber subState = nd.subscribe<whi_interfaces::WhiBattery>(stateTopic, 10, stateCallback);
+    ros::Subscriber subTask = nd.subscribe<whi_interfaces::WhiMotionState>(taskTopic, 10, taskCallback);
+    ros::Subscriber subDetection = nd.subscribe<whi_interfaces::WhiBoundingBoxes>(detTopic, 10, detectionCallback);
+    ros::ServiceServer serviceAction = nd.advertiseService("action", GetAction);
+
+    std::thread senddataTh(senddataFun);
     ROS_INFO("Ready to httpclient.");
+
     ros::spin();
+    senddataTh.join();
     
     return 0;
 }
