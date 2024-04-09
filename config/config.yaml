@@ -1,9 +1,9 @@
-host: "192.168.1.191"
+host: "127.0.0.1"
 port: 8081
-posthost: "192.168.1.191"
+posthost: "127.0.0.1"
 postport: 8081
 timeout: 20
 post_addr: postaddr
 state_topic: state
 task_topic: task
-det_topic: det
+det_topic: /myState

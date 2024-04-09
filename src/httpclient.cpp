@@ -59,11 +59,11 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
     httplib::Headers headers = { { "Accept", "application/json" } };
     if (Apistr == "place")
     {
-        getStr = "/api/placing";
+        getStr = "/placing";
     }
     else if (Apistr == "reclaim")
     {
-        getStr = "/api/reclaiming";
+        getStr = "/reclaiming";
     }
 
     while (true)
@@ -127,6 +127,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
     int gettime = 0;
     httplib::Params params;
     std::string getStr = "/getRequest";
+    getStr = "/" + Apistr;
     httplib::Headers headers = { { "Accept", "application/json" } };
     Res.success = false;
     while (true)
@@ -169,6 +170,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                     }
                     else
                     {
+                        msgStr = "placing failed";
                         Res.success = false;
                         Res.message = msgStr ;
                         return true;
@@ -208,6 +210,8 @@ bool RequestPlace(std_srvs::SetBool::Request& Req,
 {
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
+    cli.set_connection_timeout(0, 800000);  
+    cli.set_read_timeout(20, 0);  
     if (Req.data)
     {
         ActionRequest(cli, "place", Res);
@@ -221,6 +225,8 @@ bool RequestPlaced(std_srvs::SetBool::Request& Req,
 {
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
+    cli.set_connection_timeout(0, 800000);  
+    cli.set_read_timeout(20, 0);      
     if (Req.data)
     {
         ActionRequest(cli, "placed", Res);
@@ -234,6 +240,8 @@ bool RequestReclaim(std_srvs::SetBool::Request& Req,
 {
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
+    cli.set_connection_timeout(0, 800000);  
+    cli.set_read_timeout(20, 0);      
     if (Req.data)
     {
         ActionRequest(cli, "reclaim", Res);
@@ -247,6 +255,8 @@ bool RequestReclaimed(std_srvs::SetBool::Request& Req,
 {
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
+    cli.set_connection_timeout(0, 800000);  
+    cli.set_read_timeout(20, 0);      
     if (Req.data)
     {
         ActionRequest(cli, "reclaimd", Res);
@@ -295,9 +305,10 @@ void taskCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgTask)
 
 void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
 {
+    ROS_INFO("indetection callback ");
     UpdateDet = true;
     detJson.clear();
-    std::vector<whi_interfaces::WhiBoundingBox> detResults = MsgDet->bounding_boxes;
+    std::vector<whi_interfaces::WhiBoundingBox> detResults(MsgDet->bounding_boxes);
     std::string clsname = detResults.front().cls;
     std::string resultStr = "result"+clsname;
     Json::Value detArray;
@@ -307,7 +318,7 @@ void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
         i++;
         Json::Value detvalue;
         detvalue["name"] = onedet.cls + std::to_string(i);
-        detvalue["value"] = onedet.state;
+        detvalue["value"] =  onedet.state;
         detvalue["unitName"] = "Unit";
         detArray.append(detvalue);
     }
@@ -332,10 +343,12 @@ void senddataFun()
 {
     const char* hostaddr = posthost.c_str();
     httplib::Client cli(hostaddr, postport);
+    cli.set_connection_timeout(0, 800000); // 800 milliseconds
+    cli.set_read_timeout(20, 0); // 20 seconds
     Json::Value sendJson;
+    ros::Rate loop_rate(1);
     while (!exit_app.load())
     {
-        ros::Rate loop_rate(1);
         if (Update)
         {
             sendJson.clear();
@@ -350,7 +363,9 @@ void senddataFun()
                 {
                     sendJson[key] = detJson[key];
                 }
+                UpdateDet = false;
             }
+            Update = false;
         }
 
         if (sendJson.isNull() || sendJson.empty())
@@ -361,22 +376,28 @@ void senddataFun()
         {
             Json::FastWriter writer;
 	        std::string sendStr = writer.write(sendJson);
+            ROS_INFO("sendstr data is: %s",sendStr.c_str());
             httplib::Params params;
             params.emplace("state", sendStr);
             std::string poststr = "/" + postAddr;
-            auto res = cli.Post(poststr, params);
-            if (res->status == httplib::StatusCode::OK_200)
+            httplib::Headers headers = { { "Accept", "application/json" } };
+            if (auto res = cli.Post(poststr, params))
             {
-                ROS_INFO("POST success ,post data is: %s",sendStr.c_str());
+                if (res->status == httplib::StatusCode::OK_200)
+                {
+                    ROS_INFO("POST success ,post data is: %s",sendStr.c_str());
+                }
+            }
+            else
+            {
+                ROS_INFO("POST fail ,error ,%d ",res.error());
             }
 
         }
 
-        Update = false;
-        UpdateDet = false;
+
         loop_rate.sleep();
     }
-
 
 }
 
