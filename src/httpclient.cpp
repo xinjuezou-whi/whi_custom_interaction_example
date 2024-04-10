@@ -170,7 +170,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                     }
                     else
                     {
-                        msgStr = "placing failed";
+                        msgStr = Apistr + "ing failed";
                         Res.success = false;
                         Res.message = msgStr ;
                         return true;
