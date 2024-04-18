@@ -12,6 +12,10 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   std_srvs
+  whi_interfaces
+  sensor_msgs
+  geometry_msgs
+  tf2
 )
 
 ## System dependencies are found with CMake's conventions
@@ -151,10 +155,11 @@ include_directories(
 #   ${catkin_LIBRARIES}
 # )
 
-add_executable(${PROJECT_NAME} src/httpclient.cpp)
+add_executable(${PROJECT_NAME} src/httpclient.cpp src/mymqttclient.cpp)
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   jsoncpp
+  mosquitto
 )
 
 #############
