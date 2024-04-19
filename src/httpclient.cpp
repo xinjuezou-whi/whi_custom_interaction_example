@@ -152,7 +152,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             {
                 ROS_INFO("%s request timeout ! , %d " ,getStr.c_str() ,gettime );
                 Res.success = false;
-                Res.message = "time out " ;
+                Res.message = "timeout" ;
                 return true;
             }
             Json::Value root;
@@ -172,6 +172,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                     bool getStart = StartActionRequst(Cli, Apistr);
                     if (getStart)
                     {
+                        msgStr = "permit";
                         Res.success = true;
                         Res.message = msgStr ;
                     }
@@ -185,6 +186,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                 }
                 else
                 {
+                    msgStr = "permit";
                     Res.success = true;
                     Res.message = msgStr ;
                 }
@@ -193,6 +195,14 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             else if (status == 101)
             {
                 ROS_INFO("%s request prohibit , msg:%s",getStr.c_str(), msgStr.c_str());
+            }
+            else if (status == 102)
+            {
+                ROS_INFO("%s device exception , msg:%s",getStr.c_str(), msgStr.c_str());
+                msgStr = "exception";       //异常
+                Res.success = false;
+                Res.message = msgStr ;
+                return true;
             }
             else
             {
@@ -317,17 +327,37 @@ void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
     detJson.clear();
     std::vector<whi_interfaces::WhiBoundingBox> detResults(MsgDet->bounding_boxes);
     std::string clsname = detResults.front().cls;
-    std::string resultStr = "result"+clsname;
+    std::string resultStr;
+    std::string substr = clsname.substr(0,4);
+    ROS_INFO("substr is %s",substr.c_str());
     Json::Value detArray;
-    int i = 0;
-    for (auto& onedet : detResults)
+    if(substr == "belt")
     {
-        i++;
-        Json::Value detvalue;
-        detvalue["name"] = onedet.cls + std::to_string(i);
-        detvalue["value"] =  onedet.state;
-        detvalue["unitName"] = "Unit";
-        detArray.append(detvalue);
+        resultStr = "resultBelt";
+        std::string isNormal = clsname.substr(5);
+        if(isNormal == "abnormal")
+        {
+            detArray["status"] = 101;
+            detArray["msg"] = "fail";
+        }
+        else if(isNormal == "normal")
+        {
+            detArray["status"] = 100;
+            detArray["msg"] = "success";
+        }
+    }else
+    {
+        resultStr = "resultDial";
+        int i = 0;
+        for (auto& onedet : detResults)
+        {
+            i++;
+            Json::Value detvalue;
+            detvalue["name"] = onedet.cls;
+            detvalue["value"] =  onedet.state;
+            detvalue["unitName"] = "Unit";
+            detArray.append(detvalue);
+        }
     }
     detJson[resultStr] = detArray;
 
@@ -491,15 +521,18 @@ poseJson["agv_angel"] = 90;
 
         for(auto onetask = taskMap.begin();onetask != taskMap.end(); onetask++)
         {
-            if(onetask->first == taskJson["order"].asString())
+            if(!taskJson.isNull())
             {
-                onetask->second = 1;
-                sendJson[onetask->first] = 1;
-            }
-            else
-            {
-                onetask->second = 0;
-                sendJson[onetask->first] = 0;
+                if(onetask->first == taskJson["order"].asString())
+                {
+                    onetask->second = 1;
+                    sendJson[onetask->first] = 1;
+                }
+                else
+                {
+                    onetask->second = 0;
+                    sendJson[onetask->first] = 0;
+                }
             }
         }
 
@@ -578,6 +611,7 @@ int main(int argc, char **argv)
     nd.param("joint_topic", jointTopic, std::string("/joint_state"));
     nd.param("pose_topic", poseTopic, std::string("/amcl_pose"));
 
+    ROS_INFO("joint_topic is %s , pose_topic is %s",jointTopic.c_str(),poseTopic.c_str());
     ros::Subscriber subJoint = nd.subscribe<sensor_msgs::JointState>(jointTopic, 10, jointCallback);
     ros::Subscriber subPose = nd.subscribe<geometry_msgs::PoseWithCovarianceStamped>(poseTopic, 10, poseCallback);
 
