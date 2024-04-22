@@ -23,6 +23,7 @@ Changelog:
 #include "whi_interfaces/WhiMotionState.h"
 #include "whi_interfaces/WhiBoundingBox.h"
 #include "whi_interfaces/WhiBoundingBoxes.h"
+#include "whi_interfaces/WhiTaskState.h"
 #include <csignal>
 #include "whi_custom_interaction_example/mymqttclient.h"
 #include <sensor_msgs/JointState.h>
@@ -31,6 +32,9 @@ Changelog:
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <angles/angles.h>
 
 std::string host;
 int port;
@@ -84,9 +88,9 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             std::cout << getres->status << std::endl;
             std::cout << getres->get_header_value("Content-Type") << std::endl;
             std::cout << getres->body << std::endl;
-            if(gettime > mytimeout)
+            if (gettime > mytimeout)
             {
-                ROS_INFO("%s request timeout ! , %d " ,getStr.c_str() ,gettime );
+                ROS_INFO("%s request timeout !, %d ", getStr.c_str(), gettime);
                 return false;
             }
 
@@ -96,13 +100,13 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
                 ROS_INFO("json::parse error!");
                 return false;
             }
+
             int status = root["status"].asInt();
             std::string msgStr = root["msg"].asString();
             if (status == 100)
             {
-                ROS_INFO("%s request permit , msg:%s", getStr.c_str() , msgStr.c_str());
+                ROS_INFO_STREAM("request " << getStr << " succeed, with msg: " << msgStr);
                 return true;
-
             }
             else if (status == 101)
             {
@@ -110,10 +114,9 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             }
             else
             {
-                ROS_INFO("request error , check your request or server response " );
+                ROS_ERROR_STREAM("request " << getStr << " exception, with msg: " << msgStr);
                 return false;
             }
-
         }
         else
         {
@@ -126,7 +129,7 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
 }
 
 // 动作请求
-bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::SetBool::Response& Res)
+void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::SetBool::Response& Res)
 {
     int ratei = 1;
     ros::Rate rate(ratei) ;
@@ -148,22 +151,28 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             std::cout << getres->status << std::endl;
             std::cout << getres->get_header_value("Content-Type") << std::endl;
             std::cout << getres->body << std::endl;
-            if(gettime > mytimeout)
+            if (gettime > mytimeout)
             {
-                ROS_INFO("%s request timeout ! , %d " ,getStr.c_str() ,gettime );
-                Res.success = false;
-                Res.message = "timeout" ;
-                return true;
+                ROS_INFO("%s request timeout !, %d", getStr.c_str(), gettime);
+                Res.message = "time out";
+                break;;
             }
+
             Json::Value root;
             if (!jsonRoot(getres->body, root))
             {
                 ROS_INFO("json::parse error!");
-                return true;
+                Res.message = "parse message from server error";
+                break;
             }
             int status = root["status"].asInt();
             std::string msgStr = root["msg"].asString();
-            if (status == 100)
+            if (status == 101)
+            {
+                // loop for next valid reponse
+                ROS_INFO("%s request prohibit , msg:%s",getStr.c_str(), msgStr.c_str());
+            }
+            else if (status == 100)
             {
                 ROS_INFO("%s request permit , msg:%s", getStr.c_str(), msgStr.c_str());
                 // 如果是place或者reclaim ，需要在动作开始执行前 发送请求
@@ -172,7 +181,6 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                     bool getStart = StartActionRequst(Cli, Apistr);
                     if (getStart)
                     {
-                        msgStr = "permit";
                         Res.success = true;
                         Res.message = msgStr ;
                     }
@@ -181,41 +189,41 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
                         msgStr = Apistr + "ing failed";
                         Res.success = false;
                         Res.message = msgStr ;
-                        return true;
                     }
                 }
                 else
                 {
-                    msgStr = "permit";
                     Res.success = true;
                     Res.message = msgStr ;
                 }
-                return true;
-            }
-            else if (status == 101)
-            {
-                ROS_INFO("%s request prohibit , msg:%s",getStr.c_str(), msgStr.c_str());
+
+                break;
             }
             else if (status == 102)
             {
-                ROS_INFO("%s device exception , msg:%s",getStr.c_str(), msgStr.c_str());
-                msgStr = "exception";       //异常
                 Res.success = false;
-                Res.message = msgStr ;
-                return true;
+                Res.message = "response with exception";
+                ROS_INFO_STREAM(Res.message);
+
+                break;
             }
             else
             {
-                ROS_INFO("request error , check your request or server response");
                 Res.success = false;
-                return true;
+                Res.message = "undefined response";
+                ROS_INFO_STREAM(Res.message);
+
+                break;
             }
         }
         else
         {
             std::cout << "error code: " << getres.error() << std::endl;
             Res.success = false;
-            return true;
+            Res.message = "web server connection failed";
+            ROS_INFO_STREAM(Res.message);
+
+            break;
         }
         gettime++;
         rate.sleep();
@@ -225,6 +233,7 @@ bool ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
 bool RequestPlace(std_srvs::SetBool::Request& Req,
     std_srvs::SetBool::Response& Res)
 {
+    ROS_INFO("sending request: place");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
@@ -240,6 +249,7 @@ bool RequestPlace(std_srvs::SetBool::Request& Req,
 bool RequestPlaced(std_srvs::SetBool::Request& Req,
     std_srvs::SetBool::Response& Res)
 {
+    ROS_INFO("sending request: placed");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
@@ -255,6 +265,7 @@ bool RequestPlaced(std_srvs::SetBool::Request& Req,
 bool RequestReclaim(std_srvs::SetBool::Request& Req,
     std_srvs::SetBool::Response& Res)
 {
+    ROS_INFO("sending request: reclaim");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
@@ -270,6 +281,7 @@ bool RequestReclaim(std_srvs::SetBool::Request& Req,
 bool RequestReclaimed(std_srvs::SetBool::Request& Req,
     std_srvs::SetBool::Response& Res)
 {
+    ROS_INFO("sending request: reclaimed");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
@@ -311,13 +323,10 @@ void stateCallback(const whi_interfaces::WhiBattery::ConstPtr& MsgBat)
 
 }
 
-void taskCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgTask)
+void taskCallback(const whi_interfaces::WhiTaskState::ConstPtr& MsgTask)
 {
-    //std::string order = MsgTask->order; 
-    //std::string suborder = MsgTask->suborder;
-    taskJson["order"] = "order";
-    taskJson["subOrder"] = "subOrder";
-    
+    taskJson["order"] = MsgTask->parent_name;
+    taskJson["subOrder"] = MsgTask->name;
 }
 
 void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
@@ -386,8 +395,8 @@ void senddataFun()
     ros::Rate loop_rate(1);
     while (!exit_app.load())
     {
-        if (Update)
-        {
+        // if (Update)
+        // {
             //----  test start -----
             //taskJson["order"] = 5;
             //taskJson["subOrder"] = 100;
@@ -407,20 +416,18 @@ void senddataFun()
                 }
                 UpdateDet = false;
             }
-            Update = false;
-        }
+            // Update = false;
+        // }
 
         if (sendJson.isNull() || sendJson.empty())
         {
-            ROS_INFO("sendJson is empty " );
+            // ROS_INFO("sendJson is empty");
         }
         else
         {
             Json::FastWriter writer;
 	        std::string sendStr = writer.write(sendJson);
             ROS_INFO("sendstr data is: %s",sendStr.c_str());
-            httplib::Params params;
-            params.emplace("state", sendStr);
             std::string poststr = "/" + postAddr;
             httplib::Headers headers = { { "content-type", "application/json" } };
             if ( auto res = cli.Post(poststr, headers, sendStr, "application/json"))
@@ -448,6 +455,11 @@ whi_custom_interaction_example::MyMqttClient myMqtt;
 std::string mqtttopic;
 Json::Value jointJson;
 Json::Value poseJson;
+Json::Value motionJson;
+std::string base_link;
+tf2_ros::Buffer buffer;
+std::shared_ptr<tf2_ros::TransformListener> tf_listener{ nullptr };
+std::vector<double> offsets_idiot;
 
 void jointCallback(const sensor_msgs::JointStateConstPtr& MsgJoint)
 {
@@ -463,28 +475,44 @@ void jointCallback(const sensor_msgs::JointStateConstPtr& MsgJoint)
 
 }
 
+geometry_msgs::TransformStamped listenTf(const std::string& DstFrame, const std::string& SrcFrame,
+    const ros::Time& Time)
+{
+    try
+    {
+        return buffer.lookupTransform(DstFrame, SrcFrame, Time, ros::Duration(1.0));
+    }
+    catch (tf2::TransformException &e)
+    {
+        ROS_ERROR("%s", e.what());
+        return geometry_msgs::TransformStamped();
+    }
+}
+
 void poseCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& MsgPose)
 {
+	auto trans = listenTf("map", base_link, ros::Time(0));
 
-    float x = MsgPose->pose.pose.position.x;
-    float y = MsgPose->pose.pose.position.y;
     Json::Value item;
-    poseJson["agv_x_axis"] = x;
-    poseJson["agv_y_axis"] = y;
+    poseJson["agv_x_axis"] = trans.transform.translation.x + offsets_idiot[0];
+    poseJson["agv_y_axis"] = trans.transform.translation.y + offsets_idiot[1];
 
-    float ox = MsgPose->pose.pose.orientation.x;
-    float oy = MsgPose->pose.pose.orientation.y;
-    float oz = MsgPose->pose.pose.orientation.z;
-    float ow = MsgPose->pose.pose.orientation.w;
-    tf2::Quaternion quaternion(ox, oy, oz, ow);
+    tf2::Quaternion quaternion(trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z,
+        trans.transform.rotation.w);
     double roll = 0.0, pitch = 0.0, yaw = 0.0;
   	tf2::Matrix3x3(quaternion).getRPY(roll, pitch, yaw);
-    ROS_INFO("roll:%f , pitch:%f , yaw:%f ",roll,pitch,yaw);
+    // ROS_INFO("roll:%f , pitch:%f , yaw:%f ",roll,pitch,yaw);
     item["rot"] = yaw;
     //poseJson.clear();
-    poseJson["agv_angel"] = yaw * 180 / 3.1415926535 ;
-
+    poseJson["agv_angel"] = angles::to_degrees(yaw);
 }
+
+void motionstateCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgMotion)
+{
+    int state = MsgMotion->state;
+    motionJson["motion"] = state ;
+}
+
 
 void senddataMqtt()
 {
@@ -498,19 +526,8 @@ void senddataMqtt()
 
     while (!exit_app.load())
     {
-/*
-jointJson["joint1"] = 10;
-jointJson["joint2"] = 10;
-jointJson["joint3"] = 10;
-jointJson["joint4"] = 10;
-jointJson["joint5"] = 10;
-jointJson["joint6"] = 10;
-
-poseJson["agv_x_axis"] = 20;
-poseJson["agv_y_axis"] = 30;
-poseJson["agv_angel"] = 90;
-*/
-
+        // get the robot pose
+        poseCallback(nullptr);
 
         sendJson.clear();
         sendJson = jointJson;
@@ -519,22 +536,40 @@ poseJson["agv_angel"] = 90;
             sendJson[key] = poseJson[key];
         }
 
-        for(auto onetask = taskMap.begin();onetask != taskMap.end(); onetask++)
+        if(taskJson["order"] == "pgnd_inspection" && taskJson["subOrder"] == "up_handle_grabbed")
         {
-            if(!taskJson.isNull())
-            {
-                if(onetask->first == taskJson["order"].asString())
-                {
-                    onetask->second = 1;
-                    sendJson[onetask->first] = 1;
-                }
-                else
-                {
-                    onetask->second = 0;
-                    sendJson[onetask->first] = 0;
-                }
-            }
+            sendJson["probe"] = 1;
         }
+        else
+        {
+            sendJson["probe"] = 0;
+        }
+        if(taskJson["order"] == "glass_inspection" && taskJson["subOrder"] == "up_suction_grabbed")
+        {
+            sendJson["sucker"] = 1;
+        }
+        else
+        {
+            sendJson["sucker"] = 0;
+        }        
+        if(taskJson["order"] == "glass_inspection" && taskJson["subOrder"] == "up_to_safe")
+        {
+            sendJson["sucker"] = 1;
+            sendJson["sucker_grab"] = 1;
+        }
+        else
+        {
+            sendJson["sucker_grab"] = 0;
+        }
+        if(motionJson["motion"] == whi_interfaces::WhiMotionState::STA_STANDBY)
+        {
+            sendJson["robotstart"] = 0;
+        }
+        else
+        {
+            sendJson["robotstart"] = 1;
+        }
+
 
         if (sendJson.isNull() || sendJson.empty())
         {
@@ -544,10 +579,10 @@ poseJson["agv_angel"] = 90;
         {
             Json::FastWriter writer;
 	        std::string sendStr = writer.write(sendJson);
-            ROS_INFO("sendstr mqtt data is: %s",sendStr.c_str());
-            if(myMqtt.getStart())
+            if (myMqtt.getStart())
             {
-                myMqtt.mosquittoPublish(mqtttopic,sendStr);
+                myMqtt.mosquittoPublish(mqtttopic, sendStr);
+                // ROS_INFO_STREAM("mqtt topic " << mqtttopic << " and data " << sendStr);
             }
 
         }
@@ -555,7 +590,6 @@ poseJson["agv_angel"] = 90;
 
         loop_rate.sleep();
     }
-
 }
 
 int main(int argc, char **argv)
@@ -585,7 +619,7 @@ int main(int argc, char **argv)
 
     std::string stateTopic,taskTopic,detTopic;
     nd.getParam("state_topic", stateTopic);
-    nd.getParam("task_topic", taskTopic);
+    nd.getParam("task_state_topic", taskTopic);
     nd.getParam("det_topic", detTopic);
     nd.getParam("post_addr",postAddr);
     ROS_INFO("state_topic:%s , task_topic:%s , det_topic:%s",stateTopic.c_str(),taskTopic.c_str(),detTopic.c_str());   
@@ -593,7 +627,7 @@ int main(int argc, char **argv)
     signal(SIGINT, signal_handler);
 
     ros::Subscriber subState = nd.subscribe<whi_interfaces::WhiBattery>(stateTopic, 10, stateCallback);
-    ros::Subscriber subTask = nd.subscribe<whi_interfaces::WhiMotionState>(taskTopic, 10, taskCallback);
+    ros::Subscriber subTask = nd.subscribe<whi_interfaces::WhiTaskState>(taskTopic, 10, taskCallback);
     ros::Subscriber subDetection = nd.subscribe<whi_interfaces::WhiBoundingBoxes>(detTopic, 10, detectionCallback);
     ros::ServiceServer serviceAction = nd.advertiseService("action", GetAction);
 
@@ -607,15 +641,22 @@ int main(int argc, char **argv)
     nd.getParam("mqtt_port", mqttport);
     nd.getParam("mqtt_topic", mqtttopic);
 
-    std::string jointTopic,poseTopic;
+    std::string jointTopic,poseTopic,motionTopic;
     nd.param("joint_topic", jointTopic, std::string("/joint_state"));
     nd.param("pose_topic", poseTopic, std::string("/amcl_pose"));
+    nd.param("motion_topic", motionTopic, std::string("/whi_motion_state"));
 
-    ROS_INFO("joint_topic is %s , pose_topic is %s",jointTopic.c_str(),poseTopic.c_str());
     ros::Subscriber subJoint = nd.subscribe<sensor_msgs::JointState>(jointTopic, 10, jointCallback);
-    ros::Subscriber subPose = nd.subscribe<geometry_msgs::PoseWithCovarianceStamped>(poseTopic, 10, poseCallback);
+    ros::Subscriber subMotion = nd.subscribe<whi_interfaces::WhiMotionState>(motionTopic, 10, motionstateCallback);
+    //ros::Subscriber subPose = nd.subscribe<geometry_msgs::PoseWithCovarianceStamped>(poseTopic, 10, poseCallback);
+    nd.param("base_link", base_link, std::string("base_link"));
+    tf_listener = std::make_shared<tf2_ros::TransformListener>(buffer);
+    if (!nd.getParam("offsets", offsets_idiot))
+    {
+        offsets_idiot.resize(2);
+    }
 
-    myMqtt.init(mqttaddr,mqttport);
+    myMqtt.init(mqttaddr, mqttport);
     std::thread senddataMqttTh(senddataMqtt);
 
     ROS_INFO("Ready to client.");

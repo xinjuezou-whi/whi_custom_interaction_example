@@ -5,10 +5,12 @@ postport: 8080
 timeout: 20
 post_addr: api/shemt/processflow
 state_topic: state
-task_topic: task
+task_state_topic: /whi_arm_task/task_state
 det_topic: /myState
-mqtt_addr: 6.tcp.vip.cpolar.cn
-mqtt_port: 12594
+mqtt_addr: 192.168.1.104
+mqtt_port: 1883
 mqtt_topic: test/topic
-joint_topic: /joint_state
-pose_topic: /amcl_pose
+joint_topic: /whi/joint_states
+base_link: whi/base_link
+motion_topic: /whi_motion_state
+offsets: [-2.75, 2.0]
