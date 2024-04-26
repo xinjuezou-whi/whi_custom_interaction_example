@@ -111,7 +111,7 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             else if (status == 101)
             {
                 ROS_INFO("%s request prohibit , msg:%s", getStr.c_str(), msgStr.c_str());
-            }
+            }            
             else
             {
                 ROS_ERROR_STREAM("request " << getStr << " exception, with msg: " << msgStr);
@@ -317,7 +317,7 @@ void signal_handler(int signum)
 
 void stateCallback(const whi_interfaces::WhiBattery::ConstPtr& MsgBat)
 {
-    int battery = MsgBat->state;
+    int battery = MsgBat->soc;
     stateJson["power"] = battery ;
 
 
@@ -335,40 +335,44 @@ void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
     UpdateDet = true;
     detJson.clear();
     std::vector<whi_interfaces::WhiBoundingBox> detResults(MsgDet->bounding_boxes);
-    std::string clsname = detResults.front().cls;
-    std::string resultStr;
-    std::string substr = clsname.substr(0,4);
-    ROS_INFO("substr is %s",substr.c_str());
-    Json::Value detArray;
-    if(substr == "belt")
+    if(detResults.size() > 0)
     {
-        resultStr = "resultBelt";
-        std::string isNormal = clsname.substr(5);
-        if(isNormal == "abnormal")
+        std::string clsname = detResults.front().cls;
+        std::string resultStr;
+        ROS_INFO("clsname is %s",clsname.c_str());
+        std::string substr = clsname.substr(0,4);
+        ROS_INFO("substr is %s",substr.c_str());
+        Json::Value detArray;
+        if(substr == "belt")
         {
-            detArray["status"] = 101;
-            detArray["msg"] = "fail";
-        }
-        else if(isNormal == "normal")
+            resultStr = "resultBelt";
+            std::string isNormal = clsname.substr(5);
+            if(isNormal == "abnormal")
+            {
+                detArray["status"] = 101;
+                detArray["msg"] = "fail";
+            }
+            else if(isNormal == "normal")
+            {
+                detArray["status"] = 100;
+                detArray["msg"] = "success";
+            }
+        }else
         {
-            detArray["status"] = 100;
-            detArray["msg"] = "success";
+            resultStr = "resultDial";
+            int i = 0;
+            for (auto& onedet : detResults)
+            {
+                i++;
+                Json::Value detvalue;
+                detvalue["name"] = onedet.cls;
+                detvalue["value"] =  onedet.state;
+                detvalue["unitName"] = "Unit";
+                detArray.append(detvalue);
+            }
         }
-    }else
-    {
-        resultStr = "resultDial";
-        int i = 0;
-        for (auto& onedet : detResults)
-        {
-            i++;
-            Json::Value detvalue;
-            detvalue["name"] = onedet.cls;
-            detvalue["value"] =  onedet.state;
-            detvalue["unitName"] = "Unit";
-            detArray.append(detvalue);
-        }
+        detJson[resultStr] = detArray;
     }
-    detJson[resultStr] = detArray;
 
 }
 
@@ -510,9 +514,9 @@ void poseCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& MsgPos
 void motionstateCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgMotion)
 {
     int state = MsgMotion->state;
+    //ROS_INFO("motion state is %d",state);
     motionJson["motion"] = state ;
 }
-
 
 void senddataMqtt()
 {
@@ -569,7 +573,6 @@ void senddataMqtt()
         {
             sendJson["robotstart"] = 1;
         }
-
 
         if (sendJson.isNull() || sendJson.empty())
         {
