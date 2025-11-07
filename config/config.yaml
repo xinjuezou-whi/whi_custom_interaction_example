@@ -1,16 +1,24 @@
-host: "192.168.1.10"
-port: 8080
-posthost: "192.168.1.11"
-postport: 8080
-timeout: 20
-post_addr: api/shemt/processflow
-state_topic: /whi/whi_battery_monitor/battery_data
-task_state_topic: /whi_arm_task/task_state
-det_topic: /pgnd_inspection
-mqtt_addr: 192.168.1.104
-mqtt_port: 1883
-mqtt_topic: test/topic
-joint_topic: /whi/joint_states
-motion_topic: /whi/NaviBOT/motion_state
-base_link: whi/base_link
-offsets: [-2.75, 2.0]
+whi_custom_interaction_example:
+  ros__parameters:
+    # WebSocket 连接配置
+    websocket_uri: "ws://10.66.20.92:5566/robot?robotId=001"
+    
+    # 硬件接口配置 (Modbus RTU)
+    hardware_interface:
+      device_addr: 0x02          # Modbus设备地址
+      port: "/dev/ttyUART_485_2"    # 串口设备路径
+      baudrate: 9600          # 波特率
+    
+    # 初始状态配置文件路径
+    init_levels: "/home/nvidia/ros2_ws/src/whi_custom_interaction_example/config/init_levels.yaml"
+    
+    # 云台(PTZ)设备配置
+    ptz:
+      device_ip: "192.168.254.7"    # 海康威视云台IP地址
+      device_port: 8000             # 设备端口
+      username: "admin"             # 登录用户名
+      password: "jy100200300"       # 登录密码
+      channel: 1                    # 通道号
+      debug_mode: false             # 调试模式开关
+    
+  

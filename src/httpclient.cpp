@@ -15,20 +15,20 @@ Changelog:
 2024-04-02: post state module
 ******************************************************************/
 #include "whi_custom_interaction_example/httplib.h"
-#include "ros/ros.h"
-#include "std_srvs/SetBool.h"
+#include "rclcpp/rclcpp.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include <jsoncpp/json/json.h>
 #include <iostream>
-#include "whi_interfaces/WhiBattery.h"
-#include "whi_interfaces/WhiMotionState.h"
-#include "whi_interfaces/WhiBoundingBox.h"
-#include "whi_interfaces/WhiBoundingBoxes.h"
-#include "whi_interfaces/WhiTaskState.h"
+#include "whi_interfaces/msg/whi_battery.hpp"
+#include "whi_interfaces/msg/whi_motion_state.hpp"
+#include "whi_interfaces/msg/whi_bounding_box.hpp"
+#include "whi_interfaces/msg/whi_bounding_boxes.hpp"
+#include "whi_interfaces/msg/whi_task_state.hpp"
 #include <csignal>
 #include "whi_custom_interaction_example/mymqttclient.h"
-#include <sensor_msgs/JointState.h>
-#include <geometry_msgs/PointStamped.h>
-#include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -41,6 +41,9 @@ int port;
 int timeout = 30;
 std::string posthost;
 int postport;
+
+// Global node pointer for callbacks
+rclcpp::Node::SharedPtr g_node = nullptr;
 
 static bool jsonRoot(const std::string& Src, Json::Value& Root)
 {
@@ -62,7 +65,7 @@ static bool jsonRoot(const std::string& Src, Json::Value& Root)
 bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
 {
     int ratei = 1;
-    ros::Rate rate(ratei);
+    rclcpp::Rate rate(ratei);
     int mytimeout = timeout * ratei;
     int gettime = 0;
     httplib::Params params;
@@ -90,14 +93,14 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             std::cout << getres->body << std::endl;
             if (gettime > mytimeout)
             {
-                ROS_INFO("%s request timeout !, %d ", getStr.c_str(), gettime);
+                RCLCPP_INFO(g_node->get_logger(), "%s request timeout !, %d ", getStr.c_str(), gettime);
                 return false;
             }
 
             Json::Value root;
             if (!jsonRoot(getres->body, root))
             {
-                ROS_INFO("json::parse error!");
+                RCLCPP_INFO(g_node->get_logger(), "json::parse error!");
                 return false;
             }
 
@@ -105,16 +108,16 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
             std::string msgStr = root["msg"].asString();
             if (status == 100)
             {
-                ROS_INFO_STREAM("request " << getStr << " succeed, with msg: " << msgStr);
+                RCLCPP_INFO_STREAM(g_node->get_logger(), "request " << getStr << " succeed, with msg: " << msgStr);
                 return true;
             }
             else if (status == 101)
             {
-                ROS_INFO("%s request prohibit , msg:%s", getStr.c_str(), msgStr.c_str());
+                RCLCPP_INFO(g_node->get_logger(), "%s request prohibit , msg:%s", getStr.c_str(), msgStr.c_str());
             }            
             else
             {
-                ROS_ERROR_STREAM("request " << getStr << " exception, with msg: " << msgStr);
+                RCLCPP_ERROR_STREAM(g_node->get_logger(), "request " << getStr << " exception, with msg: " << msgStr);
                 return false;
             }
         }
@@ -129,17 +132,17 @@ bool StartActionRequst(httplib::Client& Cli, const std::string& Apistr)
 }
 
 // 动作请求
-void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::SetBool::Response& Res)
+void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::srv::SetBool::Response::SharedPtr& Res)
 {
     int ratei = 1;
-    ros::Rate rate(ratei) ;
+    rclcpp::Rate rate(ratei) ;
     int mytimeout = timeout * ratei;
     int gettime = 0;
     httplib::Params params;
     std::string getStr = "/getRequest";
     getStr = "/api/shemt/" + Apistr;
     httplib::Headers headers = { { "Accept", "application/json" } };
-    Res.success = false;
+    Res->success = false;
     while (true)
     {
         if (auto getres = Cli.Get(getStr, params, headers,
@@ -153,16 +156,16 @@ void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             std::cout << getres->body << std::endl;
             if (gettime > mytimeout)
             {
-                ROS_INFO("%s request timeout !, %d", getStr.c_str(), gettime);
-                Res.message = "time out";
+                RCLCPP_INFO(g_node->get_logger(), "%s request timeout !, %d", getStr.c_str(), gettime);
+                Res->message = "time out";
                 break;;
             }
 
             Json::Value root;
             if (!jsonRoot(getres->body, root))
             {
-                ROS_INFO("json::parse error!");
-                Res.message = "parse message from server error";
+                RCLCPP_INFO(g_node->get_logger(), "json::parse error!");
+                Res->message = "parse message from server error";
                 break;
             }
             int status = root["status"].asInt();
@@ -170,48 +173,48 @@ void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
             if (status == 101)
             {
                 // loop for next valid reponse
-                ROS_INFO("%s request prohibit , msg:%s",getStr.c_str(), msgStr.c_str());
+                RCLCPP_INFO(g_node->get_logger(), "%s request prohibit , msg:%s",getStr.c_str(), msgStr.c_str());
             }
             else if (status == 100)
             {
-                ROS_INFO("%s request permit , msg:%s", getStr.c_str(), msgStr.c_str());
+                RCLCPP_INFO(g_node->get_logger(), "%s request permit , msg:%s", getStr.c_str(), msgStr.c_str());
                 // 如果是place或者reclaim ，需要在动作开始执行前 发送请求
                 if (Apistr == "place" || Apistr == "reclaim")
                 {
                     bool getStart = StartActionRequst(Cli, Apistr);
                     if (getStart)
                     {
-                        Res.success = true;
-                        Res.message = msgStr ;
+                        Res->success = true;
+                        Res->message = msgStr ;
                     }
                     else
                     {
                         msgStr = Apistr + "ing failed";
-                        Res.success = false;
-                        Res.message = msgStr ;
+                        Res->success = false;
+                        Res->message = msgStr ;
                     }
                 }
                 else
                 {
-                    Res.success = true;
-                    Res.message = msgStr ;
+                    Res->success = true;
+                    Res->message = msgStr ;
                 }
 
                 break;
             }
             else if (status == 102)
             {
-                Res.success = false;
-                Res.message = "response with exception";
-                ROS_INFO_STREAM(Res.message);
+                Res->success = false;
+                Res->message = "response with exception";
+                RCLCPP_INFO_STREAM(g_node->get_logger(), Res->message);
 
                 break;
             }
             else
             {
-                Res.success = false;
-                Res.message = "undefined response";
-                ROS_INFO_STREAM(Res.message);
+                Res->success = false;
+                Res->message = "undefined response";
+                RCLCPP_INFO_STREAM(g_node->get_logger(), Res->message);
 
                 break;
             }
@@ -219,9 +222,9 @@ void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
         else
         {
             std::cout << "error code: " << getres.error() << std::endl;
-            Res.success = false;
-            Res.message = "web server connection failed";
-            ROS_INFO_STREAM(Res.message);
+            Res->success = false;
+            Res->message = "web server connection failed";
+            RCLCPP_INFO_STREAM(g_node->get_logger(), Res->message);
 
             break;
         }
@@ -230,68 +233,64 @@ void ActionRequest(httplib::Client& Cli, const std::string& Apistr, std_srvs::Se
     }
 }
 
-bool RequestPlace(std_srvs::SetBool::Request& Req,
-    std_srvs::SetBool::Response& Res)
+void RequestPlace(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    ROS_INFO("sending request: place");
+    RCLCPP_INFO(g_node->get_logger(), "sending request: place");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
     cli.set_read_timeout(20, 0);  
-    if (Req.data)
+    if (request->data)
     {
-        ActionRequest(cli, "place", Res);
+        ActionRequest(cli, "place", response);
     }
-    ROS_INFO("sending back response: [%d]", Res.success);
-    return true;
+    RCLCPP_INFO(g_node->get_logger(), "sending back response: [%d]", response->success);
 }
 
-bool RequestPlaced(std_srvs::SetBool::Request& Req,
-    std_srvs::SetBool::Response& Res)
+void RequestPlaced(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    ROS_INFO("sending request: placed");
+    RCLCPP_INFO(g_node->get_logger(), "sending request: placed");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
     cli.set_read_timeout(20, 0);      
-    if (Req.data)
+    if (request->data)
     {
-        ActionRequest(cli, "placed", Res);
+        ActionRequest(cli, "placed", response);
     }
-    ROS_INFO("sending back response: [%d]", Res.success);
-    return true;
+    RCLCPP_INFO(g_node->get_logger(), "sending back response: [%d]", response->success);
 }
 
-bool RequestReclaim(std_srvs::SetBool::Request& Req,
-    std_srvs::SetBool::Response& Res)
+void RequestReclaim(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    ROS_INFO("sending request: reclaim");
+    RCLCPP_INFO(g_node->get_logger(), "sending request: reclaim");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
     cli.set_read_timeout(20, 0);      
-    if (Req.data)
+    if (request->data)
     {
-        ActionRequest(cli, "reclaim", Res);
+        ActionRequest(cli, "reclaim", response);
     }
-    ROS_INFO("sending back response: [%d]", Res.success);
-    return true;
+    RCLCPP_INFO(g_node->get_logger(), "sending back response: [%d]", response->success);
 }
 
-bool RequestReclaimed(std_srvs::SetBool::Request& Req,
-    std_srvs::SetBool::Response& Res)
+void RequestReclaimed(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    ROS_INFO("sending request: reclaimed");
+    RCLCPP_INFO(g_node->get_logger(), "sending request: reclaimed");
     const char* hostaddr = host.c_str();
     httplib::Client cli(hostaddr, port);
     cli.set_connection_timeout(0, 800000);  
     cli.set_read_timeout(20, 0);      
-    if (Req.data)
+    if (request->data)
     {
-        ActionRequest(cli, "reclaimed", Res);
+        ActionRequest(cli, "reclaimed", response);
     }
-    ROS_INFO("sending back response: [%d]", Res.success);
-    return true;
+    RCLCPP_INFO(g_node->get_logger(), "sending back response: [%d]", response->success);
 }
 
 
@@ -311,37 +310,35 @@ void signal_handler(int signum)
     {
         std::cout << "Caught SIGINT, exiting gracefully..." << std::endl;
         exit_app = true;
-        ros::shutdown();
+        rclcpp::shutdown();
     }
 }
 
-void stateCallback(const whi_interfaces::WhiBattery::ConstPtr& MsgBat)
+void stateCallback(const whi_interfaces::msg::WhiBattery::SharedPtr MsgBat)
 {
     int battery = MsgBat->soc;
     stateJson["power"] = battery ;
-
-
 }
 
-void taskCallback(const whi_interfaces::WhiTaskState::ConstPtr& MsgTask)
+void taskCallback(const whi_interfaces::msg::WhiTaskState::SharedPtr MsgTask)
 {
     taskJson["order"] = MsgTask->parent_name;
     taskJson["subOrder"] = MsgTask->name;
 }
 
-void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
+void detectionCallback(const whi_interfaces::msg::WhiBoundingBoxes::SharedPtr MsgDet)
 {
-    ROS_INFO("in detection callback ");
+    RCLCPP_INFO(g_node->get_logger(), "in detection callback ");
     UpdateDet = true;
     detJson.clear();
-    std::vector<whi_interfaces::WhiBoundingBox> detResults(MsgDet->bounding_boxes);
+    std::vector<whi_interfaces::msg::WhiBoundingBox> detResults(MsgDet->bounding_boxes);
     if(detResults.size() > 0)
     {
         std::string clsname = detResults.front().cls;
         std::string resultStr;
-        ROS_INFO("clsname is %s",clsname.c_str());
+        RCLCPP_INFO(g_node->get_logger(), "clsname is %s",clsname.c_str());
         std::string substr = clsname.substr(0,4);
-        ROS_INFO("substr is %s",substr.c_str());
+        RCLCPP_INFO(g_node->get_logger(), "substr is %s",substr.c_str());
         Json::Value detArray;
         if(substr == "belt")
         {
@@ -373,20 +370,17 @@ void detectionCallback(const whi_interfaces::WhiBoundingBoxes::ConstPtr& MsgDet)
         }
         detJson[resultStr] = detArray;
     }
-
 }
 
 
-bool GetAction(std_srvs::SetBool::Request& Req,
-    std_srvs::SetBool::Response& Res)
+void GetAction(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
-    if (Req.data)
+    if (request->data)
     {
         Update = true;
-        Res.success = true;
+        response->success = true;
     }
-
-    return true;
 }
 
 void senddataFun()
@@ -396,7 +390,7 @@ void senddataFun()
     cli.set_connection_timeout(0, 800000); // 800 milliseconds
     cli.set_read_timeout(20, 0); // 20 seconds
     Json::Value sendJson;
-    ros::Rate loop_rate(1);
+    rclcpp::Rate loop_rate(1);
     while (!exit_app.load())
     {
         // if (Update)
@@ -425,25 +419,25 @@ void senddataFun()
 
         if (sendJson.isNull() || sendJson.empty())
         {
-            // ROS_INFO("sendJson is empty");
+            // RCLCPP_INFO(g_node->get_logger(), "sendJson is empty");
         }
         else
         {
             Json::FastWriter writer;
 	        std::string sendStr = writer.write(sendJson);
-            ROS_INFO("sendstr data is: %s",sendStr.c_str());
+            RCLCPP_INFO(g_node->get_logger(), "sendstr data is: %s",sendStr.c_str());
             std::string poststr = "/" + postAddr;
             httplib::Headers headers = { { "content-type", "application/json" } };
             if ( auto res = cli.Post(poststr, headers, sendStr, "application/json"))
             {
                 if (res->status == httplib::StatusCode::OK_200)
                 {
-                    ROS_INFO("POST success ,post data is: %s",sendStr.c_str());
+                    RCLCPP_INFO(g_node->get_logger(), "POST success ,post data is: %s",sendStr.c_str());
                 }
             }
             else
             {
-                ROS_INFO("POST fail ,error ,%d ",res.error());
+                RCLCPP_INFO(g_node->get_logger(), "POST fail ,error ,%d ",res.error());
             }
 
         }
@@ -461,11 +455,11 @@ Json::Value jointJson;
 Json::Value poseJson;
 Json::Value motionJson;
 std::string base_link;
-tf2_ros::Buffer buffer;
+tf2_ros::Buffer buffer(std::make_shared<rclcpp::Clock>(RCL_ROS_TIME));
 std::shared_ptr<tf2_ros::TransformListener> tf_listener{ nullptr };
 std::vector<double> offsets_idiot;
 
-void jointCallback(const sensor_msgs::JointStateConstPtr& MsgJoint)
+void jointCallback(const sensor_msgs::msg::JointState::SharedPtr MsgJoint)
 {
     jointJson.clear();
     Json::Value joints;
@@ -476,26 +470,25 @@ void jointCallback(const sensor_msgs::JointStateConstPtr& MsgJoint)
         std::string jointstr = "joint"+std::to_string(i);
         jointJson[jointstr] = onejoint * 180 / 3.1415926535;
     }
-
 }
 
-geometry_msgs::TransformStamped listenTf(const std::string& DstFrame, const std::string& SrcFrame,
-    const ros::Time& Time)
+geometry_msgs::msg::TransformStamped listenTf(const std::string& DstFrame, const std::string& SrcFrame,
+    const rclcpp::Time& Time)
 {
     try
     {
-        return buffer.lookupTransform(DstFrame, SrcFrame, Time, ros::Duration(1.0));
+        return buffer.lookupTransform(DstFrame, SrcFrame, Time, rclcpp::Duration::from_seconds(1.0));
     }
     catch (tf2::TransformException &e)
     {
-        ROS_ERROR("%s", e.what());
-        return geometry_msgs::TransformStamped();
+        RCLCPP_ERROR(g_node->get_logger(), "%s", e.what());
+        return geometry_msgs::msg::TransformStamped();
     }
 }
 
-void poseCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& MsgPose)
+void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr MsgPose)
 {
-	auto trans = listenTf("map", base_link, ros::Time(0));
+	auto trans = listenTf("map", base_link, rclcpp::Time(0));
 
     Json::Value item;
     poseJson["agv_x_axis"] = trans.transform.translation.x + offsets_idiot[0];
@@ -505,23 +498,23 @@ void poseCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& MsgPos
         trans.transform.rotation.w);
     double roll = 0.0, pitch = 0.0, yaw = 0.0;
   	tf2::Matrix3x3(quaternion).getRPY(roll, pitch, yaw);
-    // ROS_INFO("roll:%f , pitch:%f , yaw:%f ",roll,pitch,yaw);
+    // RCLCPP_INFO(g_node->get_logger(), "roll:%f , pitch:%f , yaw:%f ",roll,pitch,yaw);
     item["rot"] = yaw;
     //poseJson.clear();
     poseJson["agv_angel"] = angles::to_degrees(yaw);
 }
 
-void motionstateCallback(const whi_interfaces::WhiMotionState::ConstPtr& MsgMotion)
+void motionstateCallback(const whi_interfaces::msg::WhiMotionState::SharedPtr MsgMotion)
 {
     int state = MsgMotion->state;
-    //ROS_INFO("motion state is %d",state);
+    //RCLCPP_INFO(g_node->get_logger(), "motion state is %d",state);
     motionJson["motion"] = state ;
 }
 
 void senddataMqtt()
 {
     Json::Value sendJson;
-    ros::Rate loop_rate(10);
+    rclcpp::Rate loop_rate(10);
     std::map<std::string,int> taskMap;
     taskMap.insert(std::pair<std::string,int>("robotstart",0));
     taskMap.insert(std::pair<std::string,int>("sucker",0));
@@ -565,7 +558,7 @@ void senddataMqtt()
         {
             sendJson["sucker_grab"] = 0;
         }
-        if(motionJson["motion"] == whi_interfaces::WhiMotionState::STA_STANDBY)
+        if(motionJson["motion"] == whi_interfaces::msg::WhiMotionState::STA_STANDBY)
         {
             sendJson["robotstart"] = 0;
         }
@@ -576,7 +569,7 @@ void senddataMqtt()
 
         if (sendJson.isNull() || sendJson.empty())
         {
-            ROS_INFO("sendJson mqtt is empty " );
+            RCLCPP_INFO(g_node->get_logger(), "sendJson mqtt is empty " );
         }
         else
         {
@@ -585,7 +578,7 @@ void senddataMqtt()
             if (myMqtt.getStart())
             {
                 myMqtt.mosquittoPublish(mqtttopic, sendStr);
-                // ROS_INFO_STREAM("mqtt topic " << mqtttopic << " and data " << sendStr);
+                // RCLCPP_INFO_STREAM(g_node->get_logger(), "mqtt topic " << mqtttopic << " and data " << sendStr);
             }
 
         }
@@ -600,39 +593,50 @@ int main(int argc, char **argv)
     setlocale(LC_ALL, ""); // for Chinese char: setlocale(LC_CTYPE, "zh_CN.utf8");
 
     const std::string nodeName("whi_custom_interaction_example");
-    ros::init(argc, argv, nodeName);
-    ros::NodeHandle nd(nodeName);
+    rclcpp::init(argc, argv);
+    g_node = rclcpp::Node::make_shared(nodeName);
 
 //---------get request -----------------------
-    bool gethost=nd.getParam("host", host);
-	bool getport=nd.getParam("port", port);
-    nd.getParam("timeout",timeout);
-    ROS_INFO("getparam host:%s , port:%d ,timeout:%d",host.c_str(),port,timeout);
+    g_node->declare_parameter("host", "");
+    g_node->declare_parameter("port", 0);
+    g_node->declare_parameter("timeout", timeout);
+    
+    host = g_node->get_parameter("host").as_string();
+    port = g_node->get_parameter("port").as_int();
+    timeout = g_node->get_parameter("timeout").as_int();
+    
+    RCLCPP_INFO(g_node->get_logger(), "getparam host:%s , port:%d ,timeout:%d",host.c_str(),port,timeout);
 
-    ros::ServiceServer servicePlace = nd.advertiseService("place", RequestPlace);
-    ros::ServiceServer servicePlaced = nd.advertiseService("placed", RequestPlaced);
-    ros::ServiceServer serviceReclaim = nd.advertiseService("reclaim", RequestReclaim);
-    ros::ServiceServer serviceReclaimed = nd.advertiseService("reclaimed", RequestReclaimed);
+    auto servicePlace = g_node->create_service<std_srvs::srv::SetBool>("place", RequestPlace);
+    auto servicePlaced = g_node->create_service<std_srvs::srv::SetBool>("placed", RequestPlaced);
+    auto serviceReclaim = g_node->create_service<std_srvs::srv::SetBool>("reclaim", RequestReclaim);
+    auto serviceReclaimed = g_node->create_service<std_srvs::srv::SetBool>("reclaimed", RequestReclaimed);
     
 //---------post states -----------------------
 
-    gethost=nd.getParam("posthost", posthost);
-	getport=nd.getParam("postport", postport);
-    ROS_INFO("post host:%s , post port:%d",posthost.c_str(),postport);   
+    g_node->declare_parameter("posthost", "");
+    g_node->declare_parameter("postport", 0);
+    posthost = g_node->get_parameter("posthost").as_string();
+    postport = g_node->get_parameter("postport").as_int();
+    RCLCPP_INFO(g_node->get_logger(), "post host:%s , post port:%d",posthost.c_str(),postport);   
 
     std::string stateTopic,taskTopic,detTopic;
-    nd.getParam("state_topic", stateTopic);
-    nd.getParam("task_state_topic", taskTopic);
-    nd.getParam("det_topic", detTopic);
-    nd.getParam("post_addr",postAddr);
-    ROS_INFO("state_topic:%s , task_topic:%s , det_topic:%s",stateTopic.c_str(),taskTopic.c_str(),detTopic.c_str());   
+    g_node->declare_parameter("state_topic", "");
+    g_node->declare_parameter("task_state_topic", "");
+    g_node->declare_parameter("det_topic", "");
+    g_node->declare_parameter("post_addr", "");
+    stateTopic = g_node->get_parameter("state_topic").as_string();
+    taskTopic = g_node->get_parameter("task_state_topic").as_string();
+    detTopic = g_node->get_parameter("det_topic").as_string();
+    postAddr = g_node->get_parameter("post_addr").as_string();
+    RCLCPP_INFO(g_node->get_logger(), "state_topic:%s , task_topic:%s , det_topic:%s",stateTopic.c_str(),taskTopic.c_str(),detTopic.c_str());   
 
     signal(SIGINT, signal_handler);
 
-    ros::Subscriber subState = nd.subscribe<whi_interfaces::WhiBattery>(stateTopic, 10, stateCallback);
-    ros::Subscriber subTask = nd.subscribe<whi_interfaces::WhiTaskState>(taskTopic, 10, taskCallback);
-    ros::Subscriber subDetection = nd.subscribe<whi_interfaces::WhiBoundingBoxes>(detTopic, 10, detectionCallback);
-    ros::ServiceServer serviceAction = nd.advertiseService("action", GetAction);
+    auto subState = g_node->create_subscription<whi_interfaces::msg::WhiBattery>(stateTopic, 10, stateCallback);
+    auto subTask = g_node->create_subscription<whi_interfaces::msg::WhiTaskState>(taskTopic, 10, taskCallback);
+    auto subDetection = g_node->create_subscription<whi_interfaces::msg::WhiBoundingBoxes>(detTopic, 10, detectionCallback);
+    auto serviceAction = g_node->create_service<std_srvs::srv::SetBool>("action", GetAction);
 
     std::thread senddataTh(senddataFun);
     
@@ -640,21 +644,30 @@ int main(int argc, char **argv)
 //---------------- handle mqtt -------------------------
     std::string mqttaddr;
     int mqttport;
-    nd.getParam("mqtt_addr", mqttaddr);
-    nd.getParam("mqtt_port", mqttport);
-    nd.getParam("mqtt_topic", mqtttopic);
+    g_node->declare_parameter("mqtt_addr", "");
+    g_node->declare_parameter("mqtt_port", 0);
+    g_node->declare_parameter("mqtt_topic", "");
+    mqttaddr = g_node->get_parameter("mqtt_addr").as_string();
+    mqttport = g_node->get_parameter("mqtt_port").as_int();
+    mqtttopic = g_node->get_parameter("mqtt_topic").as_string();
 
     std::string jointTopic,poseTopic,motionTopic;
-    nd.param("joint_topic", jointTopic, std::string("/joint_state"));
-    nd.param("pose_topic", poseTopic, std::string("/amcl_pose"));
-    nd.param("motion_topic", motionTopic, std::string("/whi_motion_state"));
+    g_node->declare_parameter("joint_topic", "/joint_state");
+    g_node->declare_parameter("pose_topic", "/amcl_pose");
+    g_node->declare_parameter("motion_topic", "/whi_motion_state");
+    jointTopic = g_node->get_parameter("joint_topic").as_string();
+    poseTopic = g_node->get_parameter("pose_topic").as_string();
+    motionTopic = g_node->get_parameter("motion_topic").as_string();
 
-    ros::Subscriber subJoint = nd.subscribe<sensor_msgs::JointState>(jointTopic, 10, jointCallback);
-    ros::Subscriber subMotion = nd.subscribe<whi_interfaces::WhiMotionState>(motionTopic, 10, motionstateCallback);
-    //ros::Subscriber subPose = nd.subscribe<geometry_msgs::PoseWithCovarianceStamped>(poseTopic, 10, poseCallback);
-    nd.param("base_link", base_link, std::string("base_link"));
+    auto subJoint = g_node->create_subscription<sensor_msgs::msg::JointState>(jointTopic, 10, jointCallback);
+    auto subMotion = g_node->create_subscription<whi_interfaces::msg::WhiMotionState>(motionTopic, 10, motionstateCallback);
+    //auto subPose = g_node->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(poseTopic, 10, poseCallback);
+    g_node->declare_parameter("base_link", "base_link");
+    base_link = g_node->get_parameter("base_link").as_string();
     tf_listener = std::make_shared<tf2_ros::TransformListener>(buffer);
-    if (!nd.getParam("offsets", offsets_idiot))
+    g_node->declare_parameter("offsets", std::vector<double>{0.0, 0.0});
+    offsets_idiot = g_node->get_parameter("offsets").as_double_array();
+    if (offsets_idiot.size() != 2)
     {
         offsets_idiot.resize(2);
     }
@@ -662,8 +675,9 @@ int main(int argc, char **argv)
     myMqtt.init(mqttaddr, mqttport);
     std::thread senddataMqttTh(senddataMqtt);
 
-    ROS_INFO("Ready to client.");
-    ros::spin();
+    RCLCPP_INFO(g_node->get_logger(), "Ready to client.");
+    rclcpp::spin(g_node);
+    rclcpp::shutdown();
     senddataTh.join();
     senddataMqttTh.join();
     
